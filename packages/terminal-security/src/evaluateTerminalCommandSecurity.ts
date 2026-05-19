@@ -38,6 +38,11 @@ export function evaluateTerminalCommandSecurity(
     return "disabled";
   }
 
+  // If user explicitly set Automatic, respect that and skip security checks
+  if (basePolicy === "allowedWithoutPermission") {
+    return "allowedWithoutPermission";
+  }
+
   // Handle null/undefined/empty commands
   if (!command || typeof command !== "string") {
     return basePolicy;
