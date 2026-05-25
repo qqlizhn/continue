@@ -405,6 +405,37 @@ void (async () => {
 
   console.log(`[info] Copied ${NODE_MODULES_TO_COPY.join(", ")}`);
 
+  // @vscode/ripgrep v1.18.0+ places the binary in a platform-specific optional
+  // package instead of @vscode/ripgrep/bin/. Copy it to the expected location
+  // so that both node_modules and out/node_modules have rg at the old path.
+  {
+    const rgArch = process.env.npm_config_arch || process.arch;
+    const rgPlatformPkg = `@vscode/ripgrep-${process.platform}-${rgArch}`;
+    const rgBinaryName = `rg${exe}`;
+    const rgSourcePath = path.join(
+      "node_modules",
+      rgPlatformPkg,
+      "bin",
+      rgBinaryName,
+    );
+    if (fs.existsSync(rgSourcePath)) {
+      const rgDestDirs = [
+        path.join("node_modules", "@vscode", "ripgrep", "bin"),
+        path.join("out", "node_modules", "@vscode", "ripgrep", "bin"),
+      ];
+      for (const dir of rgDestDirs) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.copyFileSync(rgSourcePath, path.join(dir, rgBinaryName));
+      }
+      console.log(`[info] Copied ripgrep binary from ${rgPlatformPkg}`);
+    } else {
+      console.warn(
+        `[warn] Could not find ripgrep binary at ${rgSourcePath}. ` +
+          `Ensure ${rgPlatformPkg} is installed.`,
+      );
+    }
+  }
+
   if (packageDirName && expectedPackagePath) {
     const expectedOutPackagePath = path.join(
       __dirname,

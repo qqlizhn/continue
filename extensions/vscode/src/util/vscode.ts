@@ -21,8 +21,24 @@ export function getNonce() {
   return text;
 }
 
+let _extensionUri: vscode.Uri | undefined;
+
+export function setExtensionUri(uri: vscode.Uri): void {
+  _extensionUri = uri;
+}
+
 export function getExtensionUri(): vscode.Uri {
-  return vscode.extensions.getExtension("Continue.continue")!.extensionUri;
+  if (_extensionUri) {
+    return _extensionUri;
+  }
+  // Fallback: try both known extension IDs
+  const ext =
+    vscode.extensions.getExtension("continueautocommand.continue-auto-command") ??
+    vscode.extensions.getExtension("Continue.continue");
+  if (!ext) {
+    throw new Error("Continue extension not found");
+  }
+  return ext.extensionUri;
 }
 
 export function getViewColumnOfFile(

@@ -78,8 +78,11 @@ export const uiSlice = createSlice({
     },
     // Tools
     addTool: (state, action: PayloadAction<Tool>) => {
-      state.toolSettings[action.payload.function.name] =
-        action.payload.defaultToolPolicy ?? DEFAULT_TOOL_SETTING;
+      // Only initialize if no policy has been explicitly set by the user
+      if (!(action.payload.function.name in state.toolSettings)) {
+        state.toolSettings[action.payload.function.name] =
+          action.payload.defaultToolPolicy ?? DEFAULT_TOOL_SETTING;
+      }
     },
     setToolPolicy: (
       state,
