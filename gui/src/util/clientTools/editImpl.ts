@@ -1,6 +1,7 @@
 import { resolveRelativePathInDir } from "core/util/ideUtils";
 import { v4 as uuid } from "uuid";
 import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
+import { assertFileWasRead } from "./assertFileWasRead";
 import { ClientToolImpl } from "./callClientTool";
 
 export const editToolImpl: ClientToolImpl = async (
@@ -36,6 +37,9 @@ export const editToolImpl: ClientToolImpl = async (
   if (!firstUriMatch) {
     throw new Error(`${filepath} does not exist`);
   }
+
+  assertFileWasRead(firstUriMatch, extras.getState().session.history);
+
   const streamId = uuid();
   void extras.dispatch(
     applyForEditTool({

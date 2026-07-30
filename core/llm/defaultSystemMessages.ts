@@ -46,7 +46,7 @@ export const EDIT_CODE_INSTRUCTIONS = `\
   of changes unless the user specifically asks for code only.
 `;
 
-const BRIEF_LAZY_INSTRUCTIONS = `For larger codeblocks (>20 lines), use brief language-appropriate placeholders for unmodified sections, e.g. '// ... existing code ...'`;
+const BRIEF_LAZY_INSTRUCTIONS = `For larger codeblocks (>20 lines), use brief language-appropriate placeholders for unmodified sections, e.g. '// ... existing code ...'. Never reproduce large files in full — only output the lines that change plus minimal surrounding context. If a file is too large to process, ask the user to share only the relevant section or function.`;
 
 export const DEFAULT_CHAT_SYSTEM_MESSAGE = `\
 <important_rules>

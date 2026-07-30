@@ -1,22 +1,22 @@
 import { Tiktoken, encodingForModel as _encodingForModel } from "js-tiktoken";
 
 import {
-  ChatMessage,
-  CompiledMessagesResult,
-  MessageContent,
-  MessagePart,
-  Tool,
+    ChatMessage,
+    CompiledMessagesResult,
+    MessageContent,
+    MessagePart,
+    Tool,
 } from "../index.js";
 import { autodetectTemplateType } from "./autodetect.js";
 import {
-  addSpaceToAnyEmptyMessages,
-  chatMessageIsEmpty,
-  isUserOrToolMsg,
-  messageHasToolCallId,
+    addSpaceToAnyEmptyMessages,
+    chatMessageIsEmpty,
+    messageHasToolCallId
 } from "./messages.js";
 
 import { renderChatMessage } from "../util/messageContent.js";
 import { AsyncEncoder, LlamaAsyncEncoder } from "./asyncEncoder.js";
+import { compressOldToolResults } from "./compressToolResults.js";
 import { DEFAULT_PRUNING_LENGTH } from "./constants.js";
 import { getAdjustedTokenCountFromModel } from "./getAdjustedTokenCount.js";
 import llamaTokenizer from "./llamaTokenizer.js";
@@ -176,7 +176,7 @@ function countToolsTokens(tools: Tool[], modelName: string): number {
   return numTokens + 12;
 }
 
-function countChatMessageTokens(
+export function countChatMessageTokens(
   modelName: string,
   chatMessage: ChatMessage,
 ): number {
@@ -507,6 +507,10 @@ function compileChatMessages({
     );
   }
 
+  // Compress older tool results before resorting to binary-drop.
+  // This keeps some historical context rather than losing it entirely.
+  msgsCopy = compressOldToolResults(msgsCopy, modelName, inputTokensAvailable);
+
   // Now remove messages till we're under the limit
   let currentTotal = 0;
   const historyWithTokens = msgsCopy.map((message) => {
@@ -557,14 +561,15 @@ async function cleanupAsyncEncoders(): Promise<void> {
 }
 
 export {
-  cleanupAsyncEncoders,
-  compileChatMessages,
-  countTokens,
-  countTokensAsync,
-  extractToolSequence,
-  pruneLinesFromBottom,
-  pruneLinesFromTop,
-  pruneRawPromptFromTop,
-  pruneStringFromBottom,
-  pruneStringFromTop,
+    cleanupAsyncEncoders,
+    compileChatMessages,
+    countTokens,
+    countTokensAsync,
+    extractToolSequence,
+    pruneLinesFromBottom,
+    pruneLinesFromTop,
+    pruneRawPromptFromTop,
+    pruneStringFromBottom,
+    pruneStringFromTop
 };
+

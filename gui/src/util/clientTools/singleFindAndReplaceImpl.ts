@@ -3,6 +3,7 @@ import { executeFindAndReplace } from "core/edit/searchAndReplace/performReplace
 import { validateSearchAndReplaceFilepath } from "core/edit/searchAndReplace/validateArgs";
 import { v4 as uuid } from "uuid";
 import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
+import { assertFileWasRead } from "./assertFileWasRead";
 import { ClientToolImpl } from "./callClientTool";
 
 export const singleFindAndReplaceImpl: ClientToolImpl = async (
@@ -21,6 +22,8 @@ export const singleFindAndReplaceImpl: ClientToolImpl = async (
     args.filepath,
     extras.ideMessenger.ide,
   );
+
+  assertFileWasRead(fileUri, extras.getState().session.history);
 
   const editingFileContents = await extras.ideMessenger.ide.readFile(fileUri);
   const newFileContents = executeFindAndReplace(

@@ -3,15 +3,15 @@ import { ApplyState, ApplyToFilePayload } from "core";
 import { EDIT_MODE_STREAM_ID } from "core/edit/constants";
 import { logAgentModeEditOutcome } from "../../util/editOutcomeLogger";
 import {
-  selectApplyStateByToolCallId,
-  selectToolCallById,
+    selectApplyStateByToolCallId,
+    selectToolCallById,
 } from "../selectors/selectToolCalls";
 import { updateEditStateApplyState } from "../slices/editState";
 import {
-  acceptToolCall,
-  errorToolCall,
-  updateApplyState,
-  updateToolCallOutput,
+    acceptToolCall,
+    errorToolCall,
+    updateApplyState,
+    updateToolCallOutput,
 } from "../slices/sessionSlice";
 import { ThunkApiType } from "../store";
 import { findToolCallById, logToolUsage } from "../util";
@@ -118,6 +118,14 @@ export const handleApplyStateUpdate = createAsyncThunk<
                           content: `Successfully edited ${applyState.filepath}`,
                           description: "",
                           hidden: true,
+                          ...(applyState.filepath
+                            ? {
+                                uri: {
+                                  type: "file" as const,
+                                  value: applyState.filepath,
+                                },
+                              }
+                            : {}),
                         },
                       ],
                     }),

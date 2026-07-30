@@ -16,6 +16,28 @@ vi.mock("../../redux/thunks/handleApplyStateUpdate", () => ({
   applyForEditTool: vi.fn(),
 }));
 
+function historyWithFileRead(uri: string): any {
+  return [
+    {
+      message: { role: "assistant", content: "" },
+      contextItems: [],
+      toolCallStates: [
+        {
+          toolCallId: "prior-read",
+          toolCall: {
+            id: "prior-read",
+            type: "function",
+            function: { name: "read_file", arguments: "{}" },
+          },
+          status: "done",
+          parsedArgs: {},
+          output: [{ name: uri, content: "", description: "", uri: { type: "file", value: uri } }],
+        },
+      ],
+    },
+  ];
+}
+
 describe("singleFindAndReplaceImpl", () => {
   let mockExtras: ClientToolExtras;
   let mockResolveRelativePathInDir: Mock;
@@ -33,6 +55,9 @@ describe("singleFindAndReplaceImpl", () => {
           config: {
             allowAnonymousTelemetry: false,
           },
+        },
+        session: {
+          history: historyWithFileRead("/test/file.txt"),
         },
       })) as any,
       dispatch: vi.fn() as any,
@@ -137,6 +162,15 @@ describe("singleFindAndReplaceImpl", () => {
 
     it("should resolve relative file paths", async () => {
       mockResolveRelativePathInDir.mockResolvedValue("/absolute/path/test.txt");
+      mockExtras.getState = vi.fn(
+        () =>
+          ({
+            config: { config: { allowAnonymousTelemetry: false } },
+            session: {
+              history: historyWithFileRead("/absolute/path/test.txt"),
+            },
+          }) as any,
+      );
       mockExtras.ideMessenger.ide.readFile = vi
         .fn()
         .mockResolvedValue("test content");

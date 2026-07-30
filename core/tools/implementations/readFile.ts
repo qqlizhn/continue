@@ -3,9 +3,9 @@ import { getUriPathBasename } from "../../util/uri";
 
 import { ToolImpl } from ".";
 import { throwIfFileIsSecurityConcern } from "../../indexing/ignore";
+import { ContinueError, ContinueErrorReason } from "../../util/errors";
 import { getStringArg } from "../parseArgs";
 import { throwIfFileExceedsHalfOfContext } from "./readFileLimit";
-import { ContinueError, ContinueErrorReason } from "../../util/errors";
 
 export const readFileImpl: ToolImpl = async (args, extras) => {
   const filepath = getStringArg(args, "filepath");
@@ -24,10 +24,12 @@ export const readFileImpl: ToolImpl = async (args, extras) => {
 
   const content = await extras.ide.readFile(resolvedPath.uri);
 
+  const totalLines = content ? content.split("\n").length : undefined;
   await throwIfFileExceedsHalfOfContext(
     resolvedPath.displayPath,
     content,
     extras.config.selectedModelByRole.chat,
+    totalLines,
   );
 
   return [

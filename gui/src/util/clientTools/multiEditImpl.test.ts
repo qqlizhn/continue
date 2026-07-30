@@ -17,6 +17,28 @@ vi.mock("../../redux/thunks/handleApplyStateUpdate", () => ({
   applyForEditTool: vi.fn(),
 }));
 
+function historyWithFileRead(uri: string): any {
+  return [
+    {
+      message: { role: "assistant", content: "" },
+      contextItems: [],
+      toolCallStates: [
+        {
+          toolCallId: "prior-read",
+          toolCall: {
+            id: "prior-read",
+            type: "function",
+            function: { name: "read_file", arguments: "{}" },
+          },
+          status: "done",
+          parsedArgs: {},
+          output: [{ name: uri, content: "", description: "", uri: { type: "file", value: uri } }],
+        },
+      ],
+    },
+  ];
+}
+
 describe("multiEditImpl GUI specific", () => {
   let mockExtras: ClientToolExtras;
   let mockResolveRelativePathInDir: Mock;
@@ -31,6 +53,9 @@ describe("multiEditImpl GUI specific", () => {
     mockExtras = {
       getState: vi.fn(() => ({
         config: { config: { allowAnonymousTelemetry: false } },
+        session: {
+          history: historyWithFileRead("file:///dir/test/file.txt"),
+        },
       })) as any,
       dispatch: vi.fn() as any,
       ideMessenger: {
