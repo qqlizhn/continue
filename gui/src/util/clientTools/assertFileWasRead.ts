@@ -23,6 +23,16 @@ export function assertFileWasRead(
   history: ChatHistoryItemWithMessageId[],
 ): void {
   for (const item of history) {
+    // Files attached directly as context (e.g. `@file` mentions, drag-and-drop)
+    // also count, since the model has seen their contents in the prompt.
+    const wasAttachedAsContext = item.contextItems?.some(
+      (contextItem) =>
+        contextItem.uri?.type === "file" && contextItem.uri.value === fileUri,
+    );
+    if (wasAttachedAsContext) {
+      return;
+    }
+
     for (const toolCallState of item.toolCallStates ?? []) {
       if (
         toolCallState.status !== "done" ||
