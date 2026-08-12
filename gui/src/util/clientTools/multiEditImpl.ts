@@ -4,6 +4,7 @@ import { validateSearchAndReplaceFilepath } from "core/edit/searchAndReplace/val
 import { v4 as uuid } from "uuid";
 import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
 import { assertFileWasRead } from "./assertFileWasRead";
+import { withFileLock } from "./fileLock";
 import { ClientToolImpl } from "./callClientTool";
 
 export const multiEditImpl: ClientToolImpl = async (
@@ -19,28 +20,30 @@ export const multiEditImpl: ClientToolImpl = async (
     extras.ideMessenger.ide,
   );
 
-  assertFileWasRead(fileUri, extras.getState().session.history);
+  return withFileLock(fileUri, async () => {
+    assertFileWasRead(fileUri, extras.getState().session.history);
 
-  const editingFileContents = await extras.ideMessenger.ide.readFile(fileUri);
-  const newFileContents = executeMultiFindAndReplace(
-    editingFileContents,
-    edits,
-  );
+    const editingFileContents = await extras.ideMessenger.ide.readFile(fileUri);
+    const newFileContents = executeMultiFindAndReplace(
+      editingFileContents,
+      edits,
+    );
 
-  const streamId = uuid();
-  void extras.dispatch(
-    applyForEditTool({
-      streamId,
-      toolCallId,
-      text: newFileContents,
-      filepath: fileUri,
-      isSearchAndReplace: true,
-    }),
-  );
+    const streamId = uuid();
+    void extras.dispatch(
+      applyForEditTool({
+        streamId,
+        toolCallId,
+        text: newFileContents,
+        filepath: fileUri,
+        isSearchAndReplace: true,
+      }),
+    );
 
-  // Return success - applyToFile will handle the completion state
-  return {
-    respondImmediately: false, // Let apply state handle completion
-    output: undefined,
-  };
+    // Return success - applyToFile will handle the completion state
+    return {
+      respondImmediately: false, // Let apply state handle completion
+      output: undefined,
+    };
+  });
 };

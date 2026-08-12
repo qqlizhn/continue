@@ -2,6 +2,7 @@ import { resolveRelativePathInDir } from "core/util/ideUtils";
 import { v4 as uuid } from "uuid";
 import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
 import { assertFileWasRead } from "./assertFileWasRead";
+import { withFileLock } from "./fileLock";
 import { ClientToolImpl } from "./callClientTool";
 
 export const editToolImpl: ClientToolImpl = async (
@@ -38,20 +39,22 @@ export const editToolImpl: ClientToolImpl = async (
     throw new Error(`${filepath} does not exist`);
   }
 
-  assertFileWasRead(firstUriMatch, extras.getState().session.history);
+  return withFileLock(firstUriMatch, async () => {
+    assertFileWasRead(firstUriMatch, extras.getState().session.history);
 
-  const streamId = uuid();
-  void extras.dispatch(
-    applyForEditTool({
-      streamId,
-      text: args.changes,
-      toolCallId,
-      filepath: firstUriMatch,
-    }),
-  );
+    const streamId = uuid();
+    void extras.dispatch(
+      applyForEditTool({
+        streamId,
+        text: args.changes,
+        toolCallId,
+        filepath: firstUriMatch,
+      }),
+    );
 
-  return {
-    respondImmediately: false,
-    output: undefined, // no immediate output - output for edit tools should be added based on apply state coming in
-  };
+    return {
+      respondImmediately: false,
+      output: undefined, // no immediate output - output for edit tools should be added based on apply state coming in
+    };
+  });
 };
