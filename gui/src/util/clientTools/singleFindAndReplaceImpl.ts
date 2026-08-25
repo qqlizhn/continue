@@ -1,19 +1,18 @@
 import { validateSingleEdit } from "core/edit/searchAndReplace/findAndReplaceUtils";
+import { findSearchMatches } from "core/edit/searchAndReplace/findSearchMatch";
 import { executeFindAndReplace } from "core/edit/searchAndReplace/performReplace";
 import { validateSearchAndReplaceFilepath } from "core/edit/searchAndReplace/validateArgs";
-import { v4 as uuid } from "uuid";
-import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
+import { getCleanUriPath, getUriPathBasename } from "core/util/uri";
 import { assertFileWasRead } from "./assertFileWasRead";
-import { withFileLock } from "./fileLock";
 import { ClientToolImpl } from "./callClientTool";
+import { withFileLock } from "./fileLock";
+import { offsetToPosition } from "./offsetToPosition";
 
 export const singleFindAndReplaceImpl: ClientToolImpl = async (
   args,
   toolCallId,
   extras,
 ) => {
-  // Note that this is fully duplicate of what occurs in args preprocessing
-  // This is to handle cases where file changes while tool call is pending
   const { oldString, newString, replaceAll } = validateSingleEdit(
     args.old_string,
     args.new_string,
@@ -27,31 +26,63 @@ export const singleFindAndReplaceImpl: ClientToolImpl = async (
   return withFileLock(fileUri, async () => {
     assertFileWasRead(fileUri, extras.getState().session.history);
 
-    const editingFileContents = await extras.ideMessenger.ide.readFile(fileUri);
-    const newFileContents = executeFindAndReplace(
-      editingFileContents,
-      oldString,
-      newString,
-      replaceAll ?? false,
-      0,
-    );
+    if (extras.ideMessenger.ide.applyEdit) {
+      // Use WorkspaceEdit-based approach (preferred)
+      // Handles unsaved changes, supports undo/redo, detects conflicts
+      const editingFileContents =
+        await extras.ideMessenger.ide.readFile(fileUri);
 
-    // Apply the changes to the file
-    const streamId = uuid();
-    void extras.dispatch(
-      applyForEditTool({
-        streamId,
-        toolCallId,
-        text: newFileContents,
-        filepath: fileUri,
-        isSearchAndReplace: true,
-      }),
-    );
+      // Find the match positions in the file
+      const matches = findSearchMatches(editingFileContents, oldString);
+      if (matches.length === 0) {
+        throw new Error(
+          `Edit failed: string not found in file: \`${oldString.slice(0, 50)}...\``,
+        );
+      }
+      if (!replaceAll && matches.length > 1) {
+        throw new Error(
+          `Edit failed: \`${oldString.slice(0, 50)}...\` appears ${matches.length} times. Use replace_all=true to replace all occurrences.`,
+        );
+      }
 
-    // Return success - applyToFile will handle the completion state
+      // Convert each match to a Range-based edit
+      const edits = (replaceAll ? matches : [matches[0]]).map((match) => ({
+        startLine: offsetToPosition(editingFileContents, match.startIndex).line,
+        startCharacter: offsetToPosition(editingFileContents, match.startIndex)
+          .character,
+        endLine: offsetToPosition(editingFileContents, match.endIndex).line,
+        endCharacter: offsetToPosition(editingFileContents, match.endIndex)
+          .character,
+        newText: newString,
+      }));
+      await extras.ideMessenger.ide.applyEdit!(fileUri, edits);
+    } else {
+      // Fallback: direct writeFile (legacy)
+      const editingFileContents =
+        await extras.ideMessenger.ide.readFile(fileUri);
+      const newFileContents = executeFindAndReplace(
+        editingFileContents,
+        oldString,
+        newString,
+        replaceAll ?? false,
+        0,
+      );
+      await extras.ideMessenger.ide.writeFile(fileUri, newFileContents);
+    }
+
     return {
-      respondImmediately: false, // Let apply state handle completion
-      output: undefined,
+      respondImmediately: true,
+      output: [
+        {
+          name: getUriPathBasename(fileUri),
+          description: getCleanUriPath(fileUri),
+          content: `Successfully edited ${fileUri}`,
+          uri: {
+            type: "file" as const,
+            value: fileUri,
+          },
+        },
+      ],
     };
   });
 };

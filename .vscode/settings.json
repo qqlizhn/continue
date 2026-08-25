@@ -55,5 +55,7 @@
   "conventionalCommits.promptBody": false,
   "conventionalCommits.promptFooter": false,
   "conventionalCommits.promptScopes": true,
-  "conventionalCommits.scopes": ["reg"]
+  "conventionalCommits.scopes": ["reg"],
+  "copilot-chat.automaticallyIncludeEditorContext": true,
+  "chat.workspaceContext.enabled": true
 }

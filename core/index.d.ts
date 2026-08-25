@@ -861,6 +861,28 @@ export interface IDE {
 
   writeFile(path: string, contents: string): Promise<void>;
 
+  /**
+   * Apply a set of edits to a file using VS Code's workspace edit infrastructure.
+   * This provides better reliability than writeFile because it:
+   * - Uses the editor buffer (handles unsaved changes correctly)
+   * - Supports undo/redo
+   * - Detects conflicts with concurrent edits
+   *
+   * @param filepath The file URI to edit
+   * @param edits Array of { startLine, startCharacter, endLine, endCharacter, newText }
+   *              representing text replacements (0-based line/character positions)
+   */
+  applyEdit?(
+    filepath: string,
+    edits: Array<{
+      startLine: number;
+      startCharacter: number;
+      endLine: number;
+      endCharacter: number;
+      newText: string;
+    }>,
+  ): Promise<boolean>;
+
   removeFile(path: string): Promise<void>;
 
   showVirtualFile(title: string, contents: string): Promise<void>;

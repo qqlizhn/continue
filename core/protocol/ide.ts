@@ -25,6 +25,19 @@ export type ToIdeFromWebviewOrCoreProtocol = {
   getIdeInfo: [undefined, IdeInfo];
   getWorkspaceDirs: [undefined, string[]];
   writeFile: [{ path: string; contents: string }, void];
+  applyEdit: [
+    {
+      filepath: string;
+      edits: Array<{
+        startLine: number;
+        startCharacter: number;
+        endLine: number;
+        endCharacter: number;
+        newText: string;
+      }>;
+    },
+    boolean,
+  ];
   removeFile: [{ path: string }, void];
   showVirtualFile: [{ name: string; content: string }, void];
   openFile: [{ path: string }, void];

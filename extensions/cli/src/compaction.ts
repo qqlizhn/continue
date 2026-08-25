@@ -1,315 +1,101 @@
-import { ModelConfig } from "@continuedev/config-yaml";
-import { BaseLlmApi } from "@continuedev/openai-adapters";
-import type { ChatHistoryItem } from "core/index.js";
-import { encode } from "gpt-tokenizer";
-import { ChatCompletionTool } from "openai/resources.mjs";
+const COMPACTION_PROMPT = `Your task is to create a comprehensive, detailed summary of the entire conversation that captures all essential information needed to seamlessly continue the work without any loss of context. This summary will be used to compact the conversation while preserving critical technical details, decisions, and progress.
 
-import { streamChatResponse } from "./stream/streamChatResponse.js";
-import { StreamCallbacks } from "./stream/streamChatResponse.types.js";
-import { logger } from "./util/logger.js";
-import {
-  countChatHistoryTokens,
-  countToolDefinitionTokens,
-  countTotalInputTokens,
-  getModelContextLimit,
-  getModelMaxTokens,
-} from "./util/tokenizer.js";
+## Recent Context Analysis
 
-// Buffer cap/ratio for auto-compaction threshold calculation
-export const AUTO_COMPACT_BUFFER_CAP = 15_000;
-export const AUTO_COMPACT_BUFFER_RATIO = 0.8;
+Pay special attention to the most recent agent commands and tool executions that led to this summarization being triggered. Include:
+- **Last Agent Commands**: What specific actions/tools were just executed
+- **Tool Results**: Key outcomes from recent tool calls (truncate if very long, but preserve essential information)
+- **Immediate State**: What was the system doing right before summarization
+- **Triggering Context**: What caused the token budget to be exceeded
 
-export interface CompactionResult {
-  compactedHistory: ChatHistoryItem[];
-  compactionIndex: number;
-  compactionContent: string;
-}
+## Analysis Process
 
-export interface CompactionCallbacks {
-  onStreamContent?: (content: string) => void;
-  onStreamComplete?: () => void;
-  onError?: (error: Error) => void;
-}
+Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts systematically:
 
-export interface CompactionOptions {
-  callbacks?: CompactionCallbacks;
-  abortController?: AbortController;
-  systemMessageTokens?: number;
-}
+1. **Chronological Review**: Go through the conversation chronologically, identifying key phases and transitions
+2. **Intent Mapping**: Extract all explicit and implicit user requests, goals, and expectations
+3. **Technical Inventory**: Catalog all technical concepts, tools, frameworks, and architectural decisions
+4. **Code Archaeology**: Document all files, functions, and code patterns that were discussed or modified
+5. **Progress Assessment**: Evaluate what has been completed vs. what remains pending
+6. **Context Validation**: Ensure all critical information for continuation is captured
+7. **Recent Commands Analysis**: Document the specific agent commands and tool results from the most recent operations
 
-const COMPACTION_PROMPT =
-  "Please provide a concise summary of our conversation so far, capturing the key context, decisions made, and current state. Format this as a single comprehensive message that preserves all important information needed to continue our work. You do not need to recap the system message, as this will remain. Make sure it is clear what the current stream of work was at the very end prior to compaction so that you can continue exactly where you left off without missing any information.";
+## Summary Structure
 
-const COMPACTION_PROMPT_TOKENS = 150; // rough generous token count of ^
+Your summary must include these sections in order, following the exact format below:
 
-/**
- * Compacts a chat history into a summarized form
- * @param chatHistory The current chat history to compact
- * @param model The model configuration
- * @param llmApi The LLM API instance
- * @param options Optional configuration including callbacks, abort controller, and system message tokens
- * @returns The compacted history with compaction index
- */
-export async function compactChatHistory(
-  chatHistory: ChatHistoryItem[],
-  model: ModelConfig,
-  llmApi: BaseLlmApi,
-  options?: CompactionOptions,
-): Promise<CompactionResult> {
-  const { callbacks, abortController, systemMessageTokens = 0 } = options || {};
-  // Create a prompt to summarize the conversation
-  const compactionPrompt: ChatHistoryItem = {
-    message: {
-      role: "user" as const,
-      content: COMPACTION_PROMPT,
-    },
-    contextItems: [],
-  };
+<analysis>
+[Chronological Review: Walk through conversation phases: initial request → exploration → implementation → debugging → current state]
+[Intent Mapping: List each explicit user request with message context]
+[Technical Inventory: Catalog all technologies, patterns, and decisions mentioned]
+[Code Archaeology: Document every file, function, and code change discussed]
+[Progress Assessment: What's done vs. pending with specific status]
+[Context Validation: Verify all continuation context is captured]
+[Recent Commands Analysis: Last agent commands executed, tool results (truncated if long), immediate pre-summarization state]
+</analysis>
 
-  // Check if the history with compaction prompt is too long, prune if necessary
-  let historyToUse = chatHistory;
-  let historyForCompaction = [...historyToUse, compactionPrompt];
+<summary>
+1. Conversation Overview:
+- Primary Objectives: [All explicit user requests and overarching goals]
+- Session Context: [High-level narrative of conversation flow and key phases]
+- User Intent Evolution: [How user's needs or direction changed throughout conversation]
 
-  const contextLimit = getModelContextLimit(model);
-  const maxTokens = getModelMaxTokens(model);
+2. Technical Foundation:
+- [Core Technology 1]: [Version/details and purpose]
+- [Framework/Library 2]: [Configuration and usage context]
+- [Architectural Pattern 3]: [Implementation approach and reasoning]
+- [Environment Detail 4]: [Setup specifics and constraints]
 
-  // Check if system message is already in the history to avoid double-counting
-  const hasSystemMessageInHistory = chatHistory.some(
-    (item) => item.message.role === "system",
-  );
+3. Codebase Status:
+- [File Name 1]:
+- Purpose: [Why this file is important to the project]
+- Current State: [Summary of recent changes or modifications]
+- Key Code Segments: [Important functions/classes with brief explanations]
+- Dependencies: [How this relates to other components]
+- [File Name 2]:
+- Purpose: [Role in the project]
+- Current State: [Modification status]
+- Key Code Segments: [Critical code blocks]
 
-  // Account for system message (if not already in history) AND compaction prompt
-  const systemMessageReservation = hasSystemMessageInHistory
-    ? 0
-    : systemMessageTokens;
+4. Problem Resolution:
+- Issues Encountered: [Technical problems, bugs, or challenges faced]
+- Solutions Implemented: [How problems were resolved and reasoning]
+- Debugging Context: [Ongoing troubleshooting efforts or known issues]
+- Lessons Learned: [Important insights or patterns discovered]
 
-  const availableForInput =
-    contextLimit -
-    maxTokens -
-    systemMessageReservation -
-    COMPACTION_PROMPT_TOKENS;
+5. Progress Tracking:
+- Completed Tasks: [What has been successfully implemented with status indicators]
+- Partially Complete Work: [Tasks in progress with current completion status]
+- Validated Outcomes: [Features or code confirmed working through testing]
 
-  // Check if we need to prune to fit within context
-  while (
-    countChatHistoryTokens(historyForCompaction, model) > availableForInput &&
-    historyToUse.length > 0
-  ) {
-    logger.debug("Compaction history too long, pruning last message", {
-      tokenCount: countChatHistoryTokens(historyForCompaction, model),
-      availableForInput,
-      historyLength: historyToUse.length,
-    });
-    const prunedHistory = pruneLastMessage(historyToUse);
+6. Active Work State:
+- Current Focus: [Precisely what was being worked on in most recent messages]
+- Recent Context: [Detailed description of last few conversation exchanges]
+- Working Code: [Code snippets being modified or discussed recently]
+- Immediate Context: [Specific problem or feature being addressed before summary]
 
-    // Break if pruning didn't change the history (prevents infinite loop)
-    if (prunedHistory.length === historyToUse.length) {
-      logger.warn(
-        "Cannot prune history further while maintaining valid conversation structure",
-      );
-      break;
-    }
+7. Recent Operations:
+- Last Agent Commands: [Specific tools/actions executed just before summarization with exact command names]
+- Tool Results Summary: [Key outcomes from recent tool executions - truncate long results but keep essential info]
+- Pre-Summary State: [What the agent was actively doing when token budget was exceeded]
+- Operation Context: [Why these specific commands were executed and their relationship to user goals]
 
-    historyToUse = prunedHistory;
-    historyForCompaction = [...historyToUse, compactionPrompt];
-  }
+8. Continuation Plan:
+- [Pending Task 1]: [Details and specific next steps]
+- [Pending Task 2]: [Requirements and continuation context]
+- [Priority Information]: [Which tasks are most urgent or logically sequential]
+- [Next Action]: [Immediate next step with direct quotes from recent messages]
+</summary>
 
-  // Stream the compaction response (service drives updates; this collects content locally)
-  const controller = abortController || new AbortController();
+## Quality Guidelines
 
-  let compactionContent = "";
-  const streamCallbacks: StreamCallbacks = {
-    onContent: (content: string) => {
-      compactionContent += content;
-      callbacks?.onStreamContent?.(content);
-    },
-    onContentComplete: () => {
-      callbacks?.onStreamComplete?.();
-    },
-  };
+- **Precision**: Include exact filenames, function names, variable names, and technical terms
+- **Completeness**: Capture all context needed to continue without re-reading the full conversation
+- **Clarity**: Write for someone who needs to pick up exactly where the conversation left off
+- **Verbatim Accuracy**: Use direct quotes for task specifications and recent work context
+- **Technical Depth**: Include enough detail for complex technical decisions and code patterns
+- **Logical Flow**: Present information in a way that builds understanding progressively
+- **No Tool Calls**: Do NOT call any tools. Your only task is to generate a text summary.`;
 
-  try {
-    await streamChatResponse(
-      historyForCompaction,
-      model,
-      llmApi,
-      controller,
-      streamCallbacks,
-      true,
-    );
-
-    // Create the compacted history with a special marker
-    const systemMessage = chatHistory.find(
-      (item) => item.message.role === "system",
-    );
-    const compactionMessage: ChatHistoryItem = {
-      message: {
-        role: "assistant",
-        content: compactionContent,
-      },
-      contextItems: [],
-      conversationSummary: compactionContent,
-    };
-
-    const compactedHistory: ChatHistoryItem[] = systemMessage
-      ? [systemMessage, compactionMessage]
-      : [compactionMessage];
-
-    return {
-      compactedHistory,
-      compactionContent,
-      compactionIndex: systemMessage ? 1 : 0,
-    };
-  } catch (error) {
-    logger.error("Compaction failed", error);
-    callbacks?.onError?.(error as Error);
-    throw error;
-  }
-}
-
-/**
- * Finds the compaction index in a chat history
- * @param chatHistory The chat history to search
- * @returns The index of the compaction message, or null if not found
- */
-export function findCompactionIndex(
-  chatHistory: ChatHistoryItem[],
-): number | null {
-  const compactedIndex = chatHistory.findIndex(
-    (item) => item.conversationSummary !== undefined,
-  );
-  return compactedIndex === -1 ? null : compactedIndex;
-}
-
-/**
- * Gets the history to send to the LLM, taking compaction into account
- * @param fullHistory The complete chat history
- * @param compactionIndex The index of the compaction message, if any
- * @returns The history to send to the LLM
- */
-/**
- * Prunes chat history by removing messages from the end while ensuring
- * the history ends with either an assistant message or a tool result message
- * @param chatHistory The chat history to prune
- * @returns The pruned chat history ending with assistant or tool message
- */
-export function pruneLastMessage(
-  chatHistory: ChatHistoryItem[],
-): ChatHistoryItem[] {
-  if (chatHistory.length === 0) {
-    return chatHistory;
-  }
-
-  if (chatHistory.length === 1) {
-    // Only one message - always return empty array
-    return [];
-  }
-
-  const secondToLastIndex = chatHistory.length - 2;
-  const secondToLastItem = chatHistory[secondToLastIndex];
-
-  if (
-    secondToLastItem.message.role === "assistant" &&
-    (secondToLastItem.message as any).toolCalls?.length > 0
-  ) {
-    return chatHistory.slice(0, -2);
-  } else if (secondToLastItem.message.role === "user") {
-    return chatHistory.slice(0, -2);
-  }
-
-  return chatHistory.slice(0, -1);
-}
-
-export function getHistoryForLLM(
-  fullHistory: ChatHistoryItem[],
-  compactionIndex: number | null,
-): ChatHistoryItem[] {
-  if (compactionIndex === null || compactionIndex >= fullHistory.length) {
-    return fullHistory;
-  }
-
-  // Include system message (if at index 0) and everything from compaction index forward
-  const systemMessage =
-    fullHistory[0]?.message?.role === "system" ? fullHistory[0] : null;
-  const messagesFromCompaction = fullHistory.slice(compactionIndex);
-
-  return systemMessage && compactionIndex > 0
-    ? [systemMessage, ...messagesFromCompaction]
-    : messagesFromCompaction;
-}
-
-/**
- * Parameters for auto-compaction check
- */
-export interface AutoCompactParams {
-  chatHistory: ChatHistoryItem[];
-  model: ModelConfig;
-  systemMessage?: string;
-  tools?: ChatCompletionTool[];
-}
-
-/**
- * Get a descriptive message for auto-compaction that shows the context limit
- * @param model The model configuration
- * @returns A descriptive message explaining why compaction is needed
- */
-export function getAutoCompactMessage(model: ModelConfig): string {
-  const limit = getModelContextLimit(model);
-  return `Approaching context limit (${(limit / 1000).toFixed(0)}K tokens). Auto-compacting chat history...`;
-}
-
-/**
- * Check if the chat history exceeds the auto-compact threshold.
- * Accounts for system message and tool definitions in the calculation.
- * @param params Object containing chatHistory, model, optional systemMessage, and optional tools
- * @returns Whether auto-compacting should be triggered
- */
-export function shouldAutoCompact(params: AutoCompactParams): boolean {
-  const { chatHistory, model, systemMessage, tools } = params;
-
-  const inputTokens = countTotalInputTokens({
-    chatHistory,
-    systemMessage,
-    tools,
-    model,
-  });
-  const contextLimit = getModelContextLimit(model);
-  const maxTokens = getModelMaxTokens(model);
-
-  // Additional buffer matching the auto-compaction threshold formula
-  const ratioCompactionBuffer = Math.ceil(
-    (1 - AUTO_COMPACT_BUFFER_RATIO) * (contextLimit - maxTokens),
-  );
-  const safeCompactionBuffer = Math.max(maxTokens, ratioCompactionBuffer);
-  const compactionBuffer = Math.min(
-    safeCompactionBuffer,
-    AUTO_COMPACT_BUFFER_CAP,
-  );
-
-  const compactionThreshold = contextLimit - maxTokens - compactionBuffer;
-
-  // Ensure we have positive space available for input
-  if (compactionThreshold <= 0) {
-    throw new Error(
-      `max_tokens is larger than context_length, which should not be possible. Please check your configuration.`,
-    );
-  }
-
-  const toolTokens = tools ? countToolDefinitionTokens(tools) : 0;
-  const systemTokens = systemMessage ? encode(systemMessage).length : 0;
-  const shouldCompact = inputTokens >= compactionThreshold;
-
-  logger.debug("Context usage check", {
-    inputTokens,
-    historyTokens: countChatHistoryTokens(chatHistory, model),
-    systemTokens,
-    toolTokens,
-    contextLimit,
-    maxTokens,
-    reservedForOutput: maxTokens,
-    compactionBuffer,
-    compactionThreshold,
-    shouldCompact,
-  });
-
-  return shouldCompact;
-}
+// Rough token estimate of the compaction prompt (longer than before)
+const COMPACTION_PROMPT_TOKENS = 1200;

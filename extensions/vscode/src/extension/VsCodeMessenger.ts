@@ -713,6 +713,9 @@ export class VsCodeMessenger {
     this.onWebviewOrCore("writeFile", async (msg) => {
       return ide.writeFile(msg.data.path, msg.data.contents);
     });
+    this.onWebviewOrCore("applyEdit", async (msg) => {
+      return ide.applyEdit(msg.data.filepath, msg.data.edits);
+    });
     this.onWebviewOrCore("showVirtualFile", async (msg) => {
       return ide.showVirtualFile(msg.data.name, msg.data.content);
     });

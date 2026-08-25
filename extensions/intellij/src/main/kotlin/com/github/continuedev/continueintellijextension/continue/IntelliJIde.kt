@@ -247,11 +247,17 @@ class IntelliJIDE(
 
     override suspend fun fileExists(filepath: String): Boolean =
         fileUtils.fileExists(filepath)
-
     override suspend fun writeFile(path: String, contents: String) =
         withContext(Dispatchers.EDT) {
             fileUtils.writeFile(path, contents)
         }
+
+    override suspend fun applyEdit(
+        filepath: String,
+        edits: List<Map<String, Any>>,
+    ): Boolean = withContext(Dispatchers.EDT) {
+        fileUtils.applyEdit(filepath, edits)
+    }
 
     override suspend fun removeFile(path: String) =
         withContext(Dispatchers.EDT) {

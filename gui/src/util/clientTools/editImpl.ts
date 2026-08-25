@@ -1,9 +1,8 @@
 import { resolveRelativePathInDir } from "core/util/ideUtils";
-import { v4 as uuid } from "uuid";
-import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
+import { getCleanUriPath, getUriPathBasename } from "core/util/uri";
 import { assertFileWasRead } from "./assertFileWasRead";
-import { withFileLock } from "./fileLock";
 import { ClientToolImpl } from "./callClientTool";
+import { withFileLock } from "./fileLock";
 
 export const editToolImpl: ClientToolImpl = async (
   args,
@@ -42,19 +41,24 @@ export const editToolImpl: ClientToolImpl = async (
   return withFileLock(firstUriMatch, async () => {
     assertFileWasRead(firstUriMatch, extras.getState().session.history);
 
-    const streamId = uuid();
-    void extras.dispatch(
-      applyForEditTool({
-        streamId,
-        text: args.changes,
-        toolCallId,
-        filepath: firstUriMatch,
-      }),
-    );
+    // Direct write to file system via IDE - bypasses diff/apply pipeline
+    // for atomic, reliable edits (same pattern as opencode CLI)
+    // args.changes contains the full new file content from the LLM
+    await extras.ideMessenger.ide.writeFile(firstUriMatch, args.changes);
 
     return {
-      respondImmediately: false,
-      output: undefined, // no immediate output - output for edit tools should be added based on apply state coming in
+      respondImmediately: true,
+      output: [
+        {
+          name: getUriPathBasename(firstUriMatch),
+          description: getCleanUriPath(firstUriMatch),
+          content: `Successfully edited ${firstUriMatch}`,
+          uri: {
+            type: "file" as const,
+            value: firstUriMatch,
+          },
+        },
+      ],
     };
   });
 };

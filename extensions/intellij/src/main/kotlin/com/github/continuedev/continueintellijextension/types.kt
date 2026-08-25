@@ -185,7 +185,16 @@ interface IDE {
 
     suspend fun fileExists(filepath: String): Boolean
 
-    suspend fun writeFile(path: String, contents: String)
+        suspend fun writeFile(path: String, contents: String)
+
+    /**
+     * Apply a set of edits to a file. For JetBrains IDEs, this falls back
+     * to read-modify-write via the Document API to preserve unsaved changes.
+     */
+    suspend fun applyEdit(
+        filepath: String,
+        edits: List<Map<String, Any>>,
+    ): Boolean
 
     suspend fun removeFile(path: String)
 

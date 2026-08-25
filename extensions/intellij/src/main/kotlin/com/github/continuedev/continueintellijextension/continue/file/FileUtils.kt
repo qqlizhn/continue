@@ -22,7 +22,7 @@ class FileUtils(
     fun fileExists(fileUri: String): Boolean =
         findFile(fileUri) != null
 
-    fun writeFile(fileUri: String, content: String) {
+        fun writeFile(fileUri: String, content: String) {
         val path = VfsUtilCore.urlToPath(fileUri)
         val pathDirectory = VfsUtil.getParentDir(path)
             ?: return LOG.warn("Parent directory is null for $path")
@@ -35,6 +35,57 @@ class FileUtils(
             VfsUtil.saveText(newFile, content)
         }
     }
+
+    /**
+     * Apply a set of edits to a file using the Document API.
+     * This preserves unsaved buffer changes and supports undo.
+     *
+     * @param fileUri The file URI to edit
+     * @param edits List of edit maps with keys:
+     *   - startLine / startCharacter: start position (0-based, inclusive)
+          *   - endLine / endCharacter: end position (0-based, exclusive)
+     *   - newText: replacement text
+     */
+    fun applyEdit(fileUri: String, edits: List<Map<String, Any>>): Boolean {
+        val file = findFile(fileUri)
+            ?: return false
+
+        val document = FileDocumentManager.getInstance().getDocument(file)
+            ?: return false
+
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            // Apply edits in reverse order (by start offset) to avoid position conflicts
+            val sortedEdits = edits.sortedByDescending { edit ->
+                lineColumnToOffset(document, edit["startLine"] as? Int ?: 0, edit["startCharacter"] as? Int ?: 0)
+            }
+
+            for (edit in sortedEdits) {
+                val startLine = edit["startLine"] as? Int ?: 0
+                val startCharacter = edit["startCharacter"] as? Int ?: 0
+                val endLine = edit["endLine"] as? Int ?: startLine
+                val endCharacter = edit["endCharacter"] as? Int ?: startCharacter
+                val newText = edit["newText"] as? String ?: continue
+
+                val startOffset = lineColumnToOffset(document, startLine, startCharacter)
+                val endOffset = lineColumnToOffset(document, endLine, endCharacter)
+
+                if (startOffset >= 0 && endOffset >= startOffset && endOffset <= document.textLength) {
+                    document.replaceString(startOffset, endOffset, newText)
+                }
+            }
+        }
+        return true
+    }
+
+    /** Convert 0-based line/character to a 0-based document offset. */
+    private fun lineColumnToOffset(document: com.intellij.openapi.editor.Document, line: Int, character: Int): Int {
+        if (line < 0 || line >= document.lineCount) return -1
+        val lineStart = document.getLineStartOffset(line)
+        val lineLength = document.getLineEndOffset(line) - document.getLineStartOffset(line)
+        val clampedChar = character.coerceIn(0, lineLength)
+        return lineStart + clampedChar
+    }
+
 
     fun removeFile(fileUri: String) {
         val found = findFile(fileUri)

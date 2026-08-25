@@ -283,13 +283,25 @@ class IdeProtocolClient(
                         respond(problems)
                     }
 
-                    "writeFile" -> {
+                                        "writeFile" -> {
                         val params = gsonService.gson.fromJson(
                             dataElement.toString(),
                             WriteFileParams::class.java
                         )
                         ide.writeFile(params.path, params.contents)
                         respond(null)
+                    }
+
+                    "applyEdit" -> {
+                        val params = gsonService.gson.fromJson(
+                            dataElement.toString(),
+                            ApplyEditParams::class.java
+                        )
+                        val edits = params.edits.map { edit ->
+                            edit as Map<String, Any>
+                        }
+                        val result = ide.applyEdit(params.filepath, edits)
+                        respond(result)
                     }
 
                     "fileExists" -> {

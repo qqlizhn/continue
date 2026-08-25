@@ -10,6 +10,19 @@ data class WriteFileParams(
     val contents: String
 )
 
+data class ApplyEditParams(
+    val filepath: String,
+    val edits: List<Map<String, Any>>
+)
+
+data class ApplyEditItem(
+    val startLine: Int,
+    val startCharacter: Int,
+    val endLine: Int,
+    val endCharacter: Int,
+    val newText: String
+)
+
 data class ShowVirtualFileParams(
     val name: String,
     val content: String

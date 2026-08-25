@@ -1,1 +1,6 @@
-修改后的内容
+// ... existing code ...
+function subtract(a: number, b: number): number {
+  return a - b;
+}
+// ... rest of code ...
+
