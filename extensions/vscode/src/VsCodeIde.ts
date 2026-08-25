@@ -338,43 +338,6 @@ class VsCodeIde implements IDE {
     }
   }
 
-  async applyEdit(
-    fileUri: string,
-    edits: Array<{
-      startLine: number;
-      startCharacter: number;
-      endLine: number;
-      endCharacter: number;
-      newText: string;
-    }>,
-  ): Promise<boolean> {
-    try {
-      const uri = vscode.Uri.parse(fileUri);
-      const openTextDocument = vscode.workspace.textDocuments.find((doc) =>
-        URI.equal(doc.uri.toString(), uri.toString()),
-      );
-      const fileContents =
-        openTextDocument?.getText() ?? (await this.readFile(fileUri));
-      const eol = fileContents.includes("\r\n") ? "\r\n" : "\n";
-
-      const workspaceEdit = new vscode.WorkspaceEdit();
-      for (const edit of edits) {
-        const startPos = new vscode.Position(
-          edit.startLine,
-          edit.startCharacter,
-        );
-        const endPos = new vscode.Position(edit.endLine, edit.endCharacter);
-        const newText = edit.newText.replace(/\r?\n/g, eol);
-        workspaceEdit.replace(uri, new vscode.Range(startPos, endPos), newText);
-      }
-
-      return await vscode.workspace.applyEdit(workspaceEdit);
-    } catch (error) {
-      console.error("Failed to apply edit:", error);
-      return false;
-    }
-  }
-
   async removeFile(fileUri: string): Promise<void> {
     await vscode.workspace.fs.delete(vscode.Uri.parse(fileUri));
   }

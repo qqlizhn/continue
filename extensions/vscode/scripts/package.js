@@ -2,7 +2,9 @@ const { exec } = require("child_process");
 const fs = require("fs");
 
 const version = JSON.parse(
-  fs.readFileSync("./package.json", { encoding: "utf-8" }),
+  fs
+    .readFileSync("./package.json", { encoding: "utf-8" })
+    .replace(/^\uFEFF/, ""),
 ).version;
 
 const args = process.argv.slice(2);

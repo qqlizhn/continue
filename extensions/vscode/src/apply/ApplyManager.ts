@@ -32,18 +32,28 @@ export class ApplyManager {
     toolCallId,
     isSearchAndReplace,
   }: ApplyToFilePayload) {
-    if (filepath) {
-      await this.ensureFileOpen(filepath);
-    }
+    const targetEditor = filepath
+      ? this.getTargetEditor(filepath)
+      : vscode.window.activeTextEditor;
 
-    const { activeTextEditor } = vscode.window;
-    if (!activeTextEditor) {
-      void vscode.window.showErrorMessage("No active editor to apply edits to");
+    if (!targetEditor) {
+      if (!filepath) {
+        void vscode.window.showErrorMessage(
+          "No active editor to apply edits to",
+        );
+        return;
+      }
+
+      await this.applyToDetachedFile({
+        filepath,
+        text,
+        streamId,
+        toolCallId,
+      });
       return;
     }
 
-    // Capture the original file content before applying changes
-    const originalFileContent = activeTextEditor.document.getText();
+    const originalFileContent = targetEditor.document.getText();
 
     await this.webviewProtocol.request("updateApplyState", {
       streamId,
@@ -53,10 +63,7 @@ export class ApplyManager {
       toolCallId,
     });
 
-    const hasExistingDocument = !!activeTextEditor.document.getText().trim();
-    if (hasExistingDocument) {
-      // Currently `isSearchAndReplace` will always provide a full file rewrite
-      // as the contents of `text`, so we can just instantly apply
+    if (targetEditor.document.getText().trim()) {
       if (isSearchAndReplace) {
         await this.verticalDiffManager.instantApplyDiff(
           originalFileContent,
@@ -66,29 +73,91 @@ export class ApplyManager {
         );
       } else {
         await this.handleExistingDocument(
-          activeTextEditor,
+          targetEditor,
           text,
           streamId,
           toolCallId,
         );
       }
-    } else {
-      await this.handleEmptyDocument(
-        activeTextEditor,
-        text,
-        streamId,
-        toolCallId,
-      );
+      return;
     }
+
+    await this.handleEmptyDocument(targetEditor, text, streamId, toolCallId);
   }
 
-  private async ensureFileOpen(filepath: string): Promise<void> {
-    const fileExists = await this.ide.fileExists(filepath);
-    if (!fileExists) {
-      await this.ide.writeFile(filepath, "");
-      await this.ide.openFile(filepath);
+  private getTargetEditor(filepath: string): vscode.TextEditor | undefined {
+    return vscode.window.visibleTextEditors.find(
+      (editor) => editor.document.uri.toString() === filepath,
+    );
+  }
+
+  private getFullDocumentRange(contents: string): vscode.Range {
+    if (!contents) {
+      return new vscode.Range(0, 0, 0, 0);
     }
-    await this.ide.openFile(filepath);
+
+    const lines = contents.split(/\r?\n/);
+    return new vscode.Range(
+      0,
+      0,
+      Math.max(lines.length - 1, 0),
+      lines[lines.length - 1]?.length ?? 0,
+    );
+  }
+
+  private async applyToDetachedFile({
+    filepath,
+    text,
+    streamId,
+    toolCallId,
+  }: {
+    filepath: string;
+    text: string;
+    streamId: string;
+    toolCallId?: string;
+  }) {
+    const fileExists = await this.ide.fileExists(filepath);
+    const originalFileContent = fileExists
+      ? await this.ide.readFile(filepath)
+      : "";
+
+    await this.webviewProtocol.request("updateApplyState", {
+      streamId,
+      status: "streaming",
+      fileContent: text,
+      originalFileContent,
+      toolCallId,
+    });
+
+    if (!fileExists) {
+      await this.ide.writeFile(filepath, text);
+    } else if (this.ide.applyEdit) {
+      const fullRange = this.getFullDocumentRange(originalFileContent);
+      const applied = await this.ide.applyEdit(filepath, [
+        {
+          startLine: fullRange.start.line,
+          startCharacter: fullRange.start.character,
+          endLine: fullRange.end.line,
+          endCharacter: fullRange.end.character,
+          newText: text,
+        },
+      ]);
+
+      if (!applied) {
+        await this.ide.writeFile(filepath, text);
+      }
+    } else {
+      await this.ide.writeFile(filepath, text);
+    }
+
+    await this.webviewProtocol.request("updateApplyState", {
+      streamId,
+      status: "closed",
+      numDiffs: 0,
+      fileContent: text,
+      originalFileContent,
+      toolCallId,
+    });
   }
 
   private modelIsTooFastForStreaming(model: string): boolean {
