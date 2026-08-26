@@ -1,20 +1,14 @@
 import { ContinueErrorReason } from "core/util/errors";
 import * as ideUtils from "core/util/ideUtils";
 import { beforeEach, describe, expect, it, Mock, vi } from "vitest";
-import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
 import { ClientToolExtras } from "./callClientTool";
 import { singleFindAndReplaceImpl } from "./singleFindAndReplaceImpl";
-vi.mock("uuid", () => ({
-  v4: vi.fn(() => "test-uuid"),
-}));
 
 vi.mock("core/util/ideUtils", () => ({
   resolveRelativePathInDir: vi.fn(),
 }));
 
-vi.mock("../../redux/thunks/handleApplyStateUpdate", () => ({
-  applyForEditTool: vi.fn(),
-}));
+const FILE_URI = "/test/file.txt";
 
 function historyWithFileRead(uri: string): any {
   return [
@@ -31,52 +25,68 @@ function historyWithFileRead(uri: string): any {
           },
           status: "done",
           parsedArgs: {},
-          output: [{ name: uri, content: "", description: "", uri: { type: "file", value: uri } }],
+          output: [
+            {
+              name: uri,
+              content: "",
+              description: "",
+              uri: { type: "file", value: uri },
+            },
+          ],
         },
       ],
     },
   ];
 }
 
+function makeMockExtras(): ClientToolExtras {
+  return {
+    getState: vi.fn(() => ({
+      config: {
+        config: {
+          allowAnonymousTelemetry: false,
+        },
+      },
+      session: {
+        history: historyWithFileRead(FILE_URI),
+      },
+    })) as any,
+    dispatch: vi.fn() as any,
+    ideMessenger: {
+      ide: {
+        readFile: vi.fn(),
+        getWorkspaceDirs: vi.fn().mockResolvedValue(["/"]),
+        // Version-aware path (Copilot-style). In production, MessageIde
+        // forwards these over the protocol to VS Code, which validates the
+        // version and rejects stale edits.
+        streamTextEdit: vi.fn().mockResolvedValue(true),
+        readFileWithVersion: vi.fn(),
+        // Legacy fallbacks for IDEs without version-aware editing.
+        applyEdit: vi.fn().mockResolvedValue(true),
+        writeFile: vi.fn(),
+      } as any,
+      request: vi.fn(),
+    } as any,
+  };
+}
+
 describe("singleFindAndReplaceImpl", () => {
   let mockExtras: ClientToolExtras;
   let mockResolveRelativePathInDir: Mock;
-  let mockApplyForEditTool: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();
-
     mockResolveRelativePathInDir = vi.mocked(ideUtils.resolveRelativePathInDir);
-    mockApplyForEditTool = vi.mocked(applyForEditTool);
-
-    mockExtras = {
-      getState: vi.fn(() => ({
-        config: {
-          config: {
-            allowAnonymousTelemetry: false,
-          },
-        },
-        session: {
-          history: historyWithFileRead("/test/file.txt"),
-        },
-      })) as any,
-      dispatch: vi.fn() as any,
-      ideMessenger: {
-        ide: {
-          readFile: vi.fn(),
-        },
-        request: vi.fn(),
-      } as any,
-    };
+    mockExtras = makeMockExtras();
   });
 
   describe("argument validation", () => {
     beforeEach(() => {
-      // For validation tests, make the file exist so we can test validation errors
-      mockResolveRelativePathInDir.mockResolvedValue("/test/file.txt");
-      mockExtras.ideMessenger.ide.readFile = vi
+      // Make the file resolvable so only validation errors are exercised.
+      mockResolveRelativePathInDir.mockResolvedValue(FILE_URI);
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
         .fn()
-        .mockResolvedValue("content");
+        .mockResolvedValue({ contents: "content", version: 1 });
     });
 
     it("should throw error if filepath is missing", async () => {
@@ -160,7 +170,7 @@ describe("singleFindAndReplaceImpl", () => {
       );
     });
 
-    it("should resolve relative file paths", async () => {
+    it("should resolve relative file paths and read snapshot + version", async () => {
       mockResolveRelativePathInDir.mockResolvedValue("/absolute/path/test.txt");
       mockExtras.getState = vi.fn(
         () =>
@@ -171,9 +181,9 @@ describe("singleFindAndReplaceImpl", () => {
             },
           }) as any,
       );
-      mockExtras.ideMessenger.ide.readFile = vi
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
         .fn()
-        .mockResolvedValue("test content");
+        .mockResolvedValue({ contents: "test content", version: 2 });
 
       const args = {
         filepath: "test.txt",
@@ -187,21 +197,40 @@ describe("singleFindAndReplaceImpl", () => {
         "test.txt",
         mockExtras.ideMessenger.ide,
       );
-      expect(mockExtras.ideMessenger.ide.readFile).toHaveBeenCalledWith(
+      expect(
+        mockExtras.ideMessenger.ide.readFileWithVersion,
+      ).toHaveBeenCalledWith("/absolute/path/test.txt");
+      expect(mockExtras.ideMessenger.ide.streamTextEdit).toHaveBeenCalledWith(
         "/absolute/path/test.txt",
+        [
+          {
+            startLine: 0,
+            startCharacter: 0,
+            endLine: 0,
+            endCharacter: 4,
+            newText: "replacement",
+            version: 2,
+          },
+        ],
       );
     });
   });
 
   describe("string replacement", () => {
     beforeEach(() => {
-      mockResolveRelativePathInDir.mockResolvedValue("/test/file.txt");
+      mockResolveRelativePathInDir.mockResolvedValue(FILE_URI);
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
+        .fn()
+        .mockResolvedValue({
+          contents: "Hello world\nThis is a test file\nGoodbye world",
+          version: 5,
+        });
     });
 
     it("should throw error if old_string is not found in file", async () => {
-      mockExtras.ideMessenger.ide.readFile = vi
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
         .fn()
-        .mockResolvedValue("different content");
+        .mockResolvedValue({ contents: "different content", version: 6 });
 
       const args = {
         filepath: "file.txt",
@@ -211,18 +240,12 @@ describe("singleFindAndReplaceImpl", () => {
 
       await expect(
         singleFindAndReplaceImpl(args, "tool-call-id", mockExtras),
-      ).rejects.toThrowError(
-        expect.objectContaining({
-          reason: ContinueErrorReason.FindAndReplaceOldStringNotFound,
-        }),
+      ).rejects.toThrow(
+        "Edit failed: string not found in file: `not found...`,",
       );
     });
 
-    it("should replace single occurrence", async () => {
-      mockExtras.ideMessenger.ide.readFile = vi
-        .fn()
-        .mockResolvedValue("Hello world\nThis is a test file\nGoodbye world");
-
+    it("should replace single occurrence with a version-aware edit", async () => {
       const args = {
         filepath: "file.txt",
         old_string: "Hello world",
@@ -231,21 +254,22 @@ describe("singleFindAndReplaceImpl", () => {
 
       await singleFindAndReplaceImpl(args, "tool-call-id", mockExtras);
 
-      // Check that the dispatch was called with the applyForEditTool thunk
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "tool-call-id",
-        text: "Hi there\nThis is a test file\nGoodbye world",
-        filepath: "/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockExtras.ideMessenger.ide.streamTextEdit).toHaveBeenCalledWith(
+        FILE_URI,
+        [
+          {
+            startLine: 0,
+            startCharacter: 0,
+            endLine: 0,
+            endCharacter: 11,
+            newText: "Hi there",
+            version: 5,
+          },
+        ],
+      );
     });
 
     it("should throw error if old_string appears multiple times and replace_all is false", async () => {
-      mockExtras.ideMessenger.ide.readFile = vi
-        .fn()
-        .mockResolvedValue("Hello world\nThis is a test file\nGoodbye world");
-
       const args = {
         filepath: "file.txt",
         old_string: "world",
@@ -255,18 +279,12 @@ describe("singleFindAndReplaceImpl", () => {
 
       await expect(
         singleFindAndReplaceImpl(args, "tool-call-id", mockExtras),
-      ).rejects.toThrowError(
-        expect.objectContaining({
-          reason: ContinueErrorReason.FindAndReplaceMultipleOccurrences,
-        }),
+      ).rejects.toThrow(
+        "Edit failed: `world...` appears 2 times. Use replace_all=true to replace all occurrences.",
       );
     });
 
     it("should replace all occurrences when replace_all is true", async () => {
-      mockExtras.ideMessenger.ide.readFile = vi
-        .fn()
-        .mockResolvedValue("Hello world\nThis is a test file\nGoodbye world");
-
       const args = {
         filepath: "file.txt",
         old_string: "world",
@@ -276,19 +294,36 @@ describe("singleFindAndReplaceImpl", () => {
 
       await singleFindAndReplaceImpl(args, "tool-call-id", mockExtras);
 
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "tool-call-id",
-        text: "Hello universe\nThis is a test file\nGoodbye universe",
-        filepath: "/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockExtras.ideMessenger.ide.streamTextEdit).toHaveBeenCalledWith(
+        FILE_URI,
+        expect.arrayContaining([
+          expect.objectContaining({
+            startLine: 0,
+            startCharacter: 6,
+            endLine: 0,
+            endCharacter: 11,
+            newText: "universe",
+            version: 5,
+          }),
+          expect.objectContaining({
+            startLine: 2,
+            startCharacter: 8,
+            endLine: 2,
+            endCharacter: 13,
+            newText: "universe",
+            version: 5,
+          }),
+        ]),
+      );
     });
 
     it("should handle empty new_string (deletion)", async () => {
-      mockExtras.ideMessenger.ide.readFile = vi
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
         .fn()
-        .mockResolvedValue("Hello world\nThis is a test file");
+        .mockResolvedValue({
+          contents: "Hello world\nThis is a test file",
+          version: 1,
+        });
 
       const args = {
         filepath: "file.txt",
@@ -298,21 +333,28 @@ describe("singleFindAndReplaceImpl", () => {
 
       await singleFindAndReplaceImpl(args, "tool-call-id", mockExtras);
 
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "tool-call-id",
-        text: "world\nThis is a test file",
-        filepath: "/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockExtras.ideMessenger.ide.streamTextEdit).toHaveBeenCalledWith(
+        FILE_URI,
+        [
+          {
+            startLine: 0,
+            startCharacter: 0,
+            endLine: 0,
+            endCharacter: 6,
+            newText: "",
+            version: 1,
+          },
+        ],
+      );
     });
 
     it("should handle special characters in strings", async () => {
-      mockExtras.ideMessenger.ide.readFile = vi
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
         .fn()
-        .mockResolvedValue(
-          'const regex = /[a-z]+/g;\nconst text = "Hello $world"',
-        );
+        .mockResolvedValue({
+          contents: 'const regex = /[a-z]+/g;\nconst text = "Hello $world"',
+          version: 1,
+        });
 
       const args = {
         filepath: "file.txt",
@@ -322,21 +364,29 @@ describe("singleFindAndReplaceImpl", () => {
 
       await singleFindAndReplaceImpl(args, "tool-call-id", mockExtras);
 
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "tool-call-id",
-        text: 'const regex = /[a-z]+/g;\nconst text = "Hi $universe"',
-        filepath: "/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockExtras.ideMessenger.ide.streamTextEdit).toHaveBeenCalledWith(
+        FILE_URI,
+        [
+          {
+            startLine: 1,
+            startCharacter: 13,
+            endLine: 1,
+            endCharacter: 27,
+            newText: '"Hi $universe"',
+            version: 1,
+          },
+        ],
+      );
     });
 
     it("should preserve whitespace and indentation", async () => {
-      mockExtras.ideMessenger.ide.readFile = vi
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
         .fn()
-        .mockResolvedValue(
-          "function test() {\n    const value = 'old';\n    return value;\n}",
-        );
+        .mockResolvedValue({
+          contents:
+            "function test() {\n    const value = 'old';\n    return value;\n}",
+          version: 1,
+        });
 
       const args = {
         filepath: "file.txt",
@@ -346,22 +396,44 @@ describe("singleFindAndReplaceImpl", () => {
 
       await singleFindAndReplaceImpl(args, "tool-call-id", mockExtras);
 
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "tool-call-id",
-        text: "function test() {\n    const value = 'new';\n    return value;\n}",
-        filepath: "/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockExtras.ideMessenger.ide.streamTextEdit).toHaveBeenCalledWith(
+        FILE_URI,
+        [
+          {
+            startLine: 1,
+            startCharacter: 0,
+            endLine: 1,
+            endCharacter: 24,
+            newText: "    const value = 'new';",
+            version: 1,
+          },
+        ],
+      );
+    });
+
+    it("should reject when the extension reports a version conflict", async () => {
+      mockExtras.ideMessenger.ide.streamTextEdit = vi
+        .fn()
+        .mockResolvedValue(false);
+
+      const args = {
+        filepath: "file.txt",
+        old_string: "Hello world",
+        new_string: "Hi there",
+      };
+
+      await expect(
+        singleFindAndReplaceImpl(args, "tool-call-id", mockExtras),
+      ).rejects.toThrow(/version conflict/);
     });
   });
 
   describe("return value", () => {
     it("should return correct response structure", async () => {
-      mockResolveRelativePathInDir.mockResolvedValue("/test/file.txt");
-      mockExtras.ideMessenger.ide.readFile = vi
+      mockResolveRelativePathInDir.mockResolvedValue(FILE_URI);
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
         .fn()
-        .mockResolvedValue("test content");
+        .mockResolvedValue({ contents: "test content", version: 1 });
 
       const args = {
         filepath: "file.txt",
@@ -376,16 +448,21 @@ describe("singleFindAndReplaceImpl", () => {
       );
 
       expect(result).toEqual({
-        respondImmediately: false,
-        output: undefined,
+        respondImmediately: true,
+        output: [
+          expect.objectContaining({
+            name: "file.txt",
+            uri: { type: "file", value: FILE_URI },
+          }),
+        ],
       });
     });
   });
 
   describe("error handling", () => {
-    it("should wrap and rethrow errors from readFile", async () => {
-      mockResolveRelativePathInDir.mockResolvedValue("/test/file.txt");
-      mockExtras.ideMessenger.ide.readFile = vi
+    it("should wrap and rethrow errors from reading the file", async () => {
+      mockResolveRelativePathInDir.mockResolvedValue(FILE_URI);
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
         .fn()
         .mockRejectedValue(new Error("Permission denied"));
 

@@ -181,6 +181,36 @@ export class MessageIde implements IDE {
     return this.request("applyEdit", { filepath: fileUri, edits });
   }
 
+  async getDocumentVersion(fileUri: string): Promise<number | undefined> {
+    return this.request("getDocumentVersion", { filepath: fileUri });
+  }
+
+  async streamTextEdit(
+    fileUri: string,
+    edits: Array<{
+      startLine: number;
+      startCharacter: number;
+      endLine: number;
+      endCharacter: number;
+      newText: string;
+      version?: number;
+    }>,
+    isWholeFile?: boolean,
+  ): Promise<boolean> {
+    return this.request("streamTextEdit", {
+      filepath: fileUri,
+      edits,
+      isWholeFile,
+    });
+  }
+
+  async readFileWithVersion(fileUri: string): Promise<{
+    contents: string;
+    version?: number;
+  }> {
+    return this.request("readFileWithVersion", { filepath: fileUri });
+  }
+
   async removeFile(fileUri: string): Promise<void> {
     await this.request("removeFile", { path: fileUri });
   }

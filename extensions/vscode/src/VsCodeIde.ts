@@ -338,6 +338,273 @@ class VsCodeIde implements IDE {
     }
   }
 
+  /**
+   * Version-aware streaming text edit (Copilot-style).
+   *
+   * Each edit carries the document version it was computed against. VS Code
+   * natively rejects stale edits when versions don't match, preventing
+   * buffer/disk desync from race conditions (e.g. the user modified the file
+   * after we read the snapshot but before we applied the edit).
+   */
+  async streamTextEdit(
+    fileUri: string,
+    edits: Array<{
+      startLine: number;
+      startCharacter: number;
+      endLine: number;
+      endCharacter: number;
+      newText: string;
+      version?: number;
+    }>,
+    isWholeFile: boolean = false,
+  ): Promise<boolean> {
+    try {
+      const uri = vscode.Uri.parse(fileUri);
+      const openTextDocument = vscode.workspace.textDocuments.find((doc) =>
+        URI.equal(doc.uri.toString(), uri.toString()),
+      );
+
+      // Determine the target document version.
+      // If caller didn't specify a version, use the current document version.
+      const documentVersion = openTextDocument?.version ?? 0;
+      const targetVersion = edits[0]?.version ?? documentVersion;
+
+      // Verify the caller's version matches the current document version.
+      // This is the key race-condition guard: if the document has changed
+      // since the caller computed positions, we reject the edit immediately.
+      if (openTextDocument && targetVersion !== openTextDocument.version) {
+        console.warn(
+          `[streamTextEdit] Version mismatch for ${fileUri}: ` +
+            `expected ${targetVersion}, got ${openTextDocument.version}. ` +
+            `Edit rejected to prevent buffer/disk desync.`,
+        );
+        return false;
+      }
+
+      // Whole-file replacement (Copilot-style): replace the entire document with
+      // edits[0].newText, version-checked again at apply time so the editor
+      // buffer and disk always stay in sync.
+      if (isWholeFile) {
+        return await this.applyWholeFileTextEdit(
+          uri,
+          edits[0]?.newText ?? "",
+          targetVersion,
+        );
+      }
+
+      const fileContents =
+        openTextDocument?.getText() ?? (await this.readFile(fileUri));
+      const eol = fileContents.includes("\r\n") ? "\r\n" : "\n";
+
+      // Prefer editor.edit() when a visible editor exists - it's natively
+      // version-aware and avoids any race between our position computation
+      // and the actual edit application.
+      const editor = vscode.window.visibleTextEditors.find((e) =>
+        URI.equal(e.document.uri.toString(), uri.toString()),
+      );
+
+      if (editor) {
+        // Editor is open - use editor.edit() which is version-aware
+        const success = await editor.edit(
+          (editBuilder) => {
+            for (const edit of edits) {
+              const startPos = new vscode.Position(
+                edit.startLine,
+                edit.startCharacter,
+              );
+              const endPos = new vscode.Position(
+                edit.endLine,
+                edit.endCharacter,
+              );
+              const newText = edit.newText.replace(/\r?\n/g, eol);
+              editBuilder.replace(new vscode.Range(startPos, endPos), newText);
+            }
+          },
+          { undoStopAfter: false, undoStopBefore: false },
+        );
+
+        return success;
+      } else {
+        // No open editor - use WorkspaceEdit
+        const workspaceEdit = new vscode.WorkspaceEdit();
+        for (const edit of edits) {
+          const startPos = new vscode.Position(
+            edit.startLine,
+            edit.startCharacter,
+          );
+          const endPos = new vscode.Position(edit.endLine, edit.endCharacter);
+          const newText = edit.newText.replace(/\r?\n/g, eol);
+          workspaceEdit.replace(
+            uri,
+            new vscode.Range(startPos, endPos),
+            newText,
+          );
+        }
+
+        // If an open document exists, do a version-checked apply
+        if (openTextDocument) {
+          return await this.applyVersionedWorkspaceEdit(
+            uri,
+            edits.map((edit) => ({
+              uri,
+              range: new vscode.Range(
+                new vscode.Position(edit.startLine, edit.startCharacter),
+                new vscode.Position(edit.endLine, edit.endCharacter),
+              ),
+              newText: edit.newText.replace(/\r?\n/g, eol),
+            })),
+            targetVersion,
+          );
+        }
+
+        return await vscode.workspace.applyEdit(workspaceEdit);
+      }
+    } catch (error) {
+      console.error("Failed to apply stream text edit:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Get the current version of an open document.
+   * Returns undefined if the document is not open in the editor.
+   */
+  async getDocumentVersion(fileUri: string): Promise<number | undefined> {
+    const uri = vscode.Uri.parse(fileUri);
+    const openTextDocument = vscode.workspace.textDocuments.find((doc) =>
+      URI.equal(doc.uri.toString(), uri.toString()),
+    );
+    return openTextDocument?.version;
+  }
+
+  /**
+   * Apply a WorkspaceEdit with explicit version validation.
+   * VS Code's WorkspaceEdit doesn't natively know about versions, so we
+   * manually check the current document version before applying and re-check
+   * after applying to detect concurrent modifications.
+   */
+  private async applyVersionedWorkspaceEdit(
+    uri: vscode.Uri,
+    editsToApply: Array<{
+      uri: vscode.Uri;
+      range: vscode.Range;
+      newText: string;
+    }>,
+    expectedVersion: number,
+  ): Promise<boolean> {
+    // Re-fetch the document at apply-time to catch versions that changed
+    // between our earlier check and now.
+    const openTextDocument = vscode.workspace.textDocuments.find((doc) =>
+      URI.equal(doc.uri.toString(), uri.toString()),
+    );
+    if (openTextDocument && openTextDocument.version !== expectedVersion) {
+      console.warn(
+        `[applyVersionedWorkspaceEdit] Version mismatch for ${uri.toString()}: ` +
+          `expected ${expectedVersion}, got ${openTextDocument.version}. ` +
+          `Refusing to apply to avoid buffer/disk desync.`,
+      );
+      return false;
+    }
+
+    const workspaceEdit = new vscode.WorkspaceEdit();
+    for (const edit of editsToApply) {
+      workspaceEdit.replace(edit.uri, edit.range, edit.newText);
+    }
+
+    return await vscode.workspace.applyEdit(workspaceEdit);
+  }
+
+  /**
+   * Replace the entire document with newText, version-checked. Applies through
+   * the editor buffer whenever possible (keeps the dirty buffer and disk in
+   * sync), and only falls back to a direct disk write when the file is not
+   * open at all (no buffer exists, so there is nothing to desync).
+   */
+  private async applyWholeFileTextEdit(
+    uri: vscode.Uri,
+    newText: string,
+    expectedVersion: number,
+  ): Promise<boolean> {
+    // Re-fetch the document at apply time to close the check-then-apply window.
+    const openTextDocument = vscode.workspace.textDocuments.find((doc) =>
+      URI.equal(doc.uri.toString(), uri.toString()),
+    );
+    if (openTextDocument && openTextDocument.version !== expectedVersion) {
+      console.warn(
+        `[applyWholeFileTextEdit] Version mismatch for ${uri.toString()}: ` +
+          `expected ${expectedVersion}, got ${openTextDocument.version}. ` +
+          `Refusing to replace to avoid buffer/disk desync.`,
+      );
+      return false;
+    }
+
+    const eol = (openTextDocument?.getText() ?? "").includes("\r\n")
+      ? "\r\n"
+      : "\n";
+    const normalized = newText.replace(/\r\n/g, "\n").replace(/\n/g, eol);
+
+    const editor = vscode.window.visibleTextEditors.find((e) =>
+      URI.equal(e.document.uri.toString(), uri.toString()),
+    );
+
+    if (editor) {
+      const fullRange = new vscode.Range(
+        0,
+        0,
+        editor.document.lineCount,
+        editor.document.lineAt(
+          editor.document.lineCount - 1,
+        ).range.end.character,
+      );
+      return await editor.edit(
+        (editBuilder) => editBuilder.replace(fullRange, normalized),
+        { undoStopAfter: false, undoStopBefore: false },
+      );
+    }
+
+    if (openTextDocument) {
+      const fullRange = new vscode.Range(
+        0,
+        0,
+        openTextDocument.lineCount,
+        openTextDocument.lineAt(
+          openTextDocument.lineCount - 1,
+        ).range.end.character,
+      );
+      const workspaceEdit = new vscode.WorkspaceEdit();
+      workspaceEdit.replace(uri, fullRange, normalized);
+      return await vscode.workspace.applyEdit(workspaceEdit);
+    }
+
+    // Not open in any editor or buffer - direct write is safe (no desync).
+    await this.writeFile(uri.toString(), normalized);
+    return true;
+  }
+
+  /**
+   * Atomically read a document's contents together with its version.
+   * Binding the snapshot to its version eliminates the race between reading
+   * content and capturing the version that would otherwise leave stale
+   * positions undetected.
+   */
+  async readFileWithVersion(fileUri: string): Promise<{
+    contents: string;
+    version?: number;
+  }> {
+    const uri = vscode.Uri.parse(fileUri);
+    const openTextDocument = vscode.workspace.textDocuments.find((doc) =>
+      URI.equal(doc.uri.toString(), uri.toString()),
+    );
+    if (openTextDocument) {
+      return {
+        contents: openTextDocument.getText(),
+        version: openTextDocument.version,
+      };
+    }
+    const contents = await this.readFile(fileUri);
+    return { contents, version: undefined };
+  }
+
   async removeFile(fileUri: string): Promise<void> {
     await vscode.workspace.fs.delete(vscode.Uri.parse(fileUri));
   }

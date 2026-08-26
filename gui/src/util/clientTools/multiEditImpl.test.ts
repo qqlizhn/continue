@@ -1,21 +1,14 @@
 import { ContinueErrorReason } from "core/util/errors";
 import * as ideUtils from "core/util/ideUtils";
 import { beforeEach, describe, expect, it, Mock, vi } from "vitest";
-import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
 import { ClientToolExtras } from "./callClientTool";
 import { multiEditImpl } from "./multiEditImpl";
-
-vi.mock("uuid", () => ({
-  v4: vi.fn(() => "test-uuid"),
-}));
 
 vi.mock("core/util/ideUtils", () => ({
   resolveRelativePathInDir: vi.fn(),
 }));
 
-vi.mock("../../redux/thunks/handleApplyStateUpdate", () => ({
-  applyForEditTool: vi.fn(),
-}));
+const FILE_URI = "file:///dir/test/file.txt";
 
 function historyWithFileRead(uri: string): any {
   return [
@@ -32,40 +25,53 @@ function historyWithFileRead(uri: string): any {
           },
           status: "done",
           parsedArgs: {},
-          output: [{ name: uri, content: "", description: "", uri: { type: "file", value: uri } }],
+          output: [
+            {
+              name: uri,
+              content: "",
+              description: "",
+              uri: { type: "file", value: uri },
+            },
+          ],
         },
       ],
     },
   ];
 }
 
+function makeMockExtras(): ClientToolExtras {
+  return {
+    getState: vi.fn(() => ({
+      config: { config: { allowAnonymousTelemetry: false } },
+      session: { history: historyWithFileRead(FILE_URI) },
+    })) as any,
+    dispatch: vi.fn() as any,
+    ideMessenger: {
+      ide: {
+        readFile: vi.fn(),
+        getWorkspaceDirs: vi.fn().mockResolvedValue(["dir1"]),
+        // Version-aware path (Copilot-style). In production, MessageIde
+        // forwards these over the protocol to VS Code, which validates the
+        // version and rejects stale edits.
+        streamTextEdit: vi.fn().mockResolvedValue(true),
+        readFileWithVersion: vi.fn(),
+        // Legacy fallbacks for IDEs without version-aware editing.
+        applyEdit: vi.fn().mockResolvedValue(true),
+        writeFile: vi.fn(),
+      } as any,
+      request: vi.fn(),
+    } as any,
+  };
+}
+
 describe("multiEditImpl GUI specific", () => {
   let mockExtras: ClientToolExtras;
   let mockResolveRelativePathInDir: Mock;
-  let mockApplyForEditTool: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();
-
+    mockExtras = makeMockExtras();
     mockResolveRelativePathInDir = vi.mocked(ideUtils.resolveRelativePathInDir);
-    mockApplyForEditTool = vi.mocked(applyForEditTool);
-
-    mockExtras = {
-      getState: vi.fn(() => ({
-        config: { config: { allowAnonymousTelemetry: false } },
-        session: {
-          history: historyWithFileRead("file:///dir/test/file.txt"),
-        },
-      })) as any,
-      dispatch: vi.fn() as any,
-      ideMessenger: {
-        ide: {
-          readFile: vi.fn(),
-          getWorkspaceDirs: vi.fn().mockResolvedValue(["dir1"]),
-        },
-        request: vi.fn(),
-      } as any,
-    };
   });
 
   describe("filepath validation", () => {
@@ -103,17 +109,15 @@ describe("multiEditImpl GUI specific", () => {
     });
   });
 
-  describe("GUI integration", () => {
+  describe("GUI integration (version-aware streamTextEdit)", () => {
     beforeEach(() => {
-      mockResolveRelativePathInDir.mockResolvedValue(
-        "file:///dir/test/file.txt",
-      );
+      mockResolveRelativePathInDir.mockResolvedValue(FILE_URI);
     });
 
-    it("should read file from IDE and dispatch edit", async () => {
-      mockExtras.ideMessenger.ide.readFile = vi
+    it("should read content + version atomically and apply via streamTextEdit", async () => {
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
         .fn()
-        .mockResolvedValue("Hello world");
+        .mockResolvedValue({ contents: "Hello world", version: 3 });
 
       await multiEditImpl(
         {
@@ -124,20 +128,43 @@ describe("multiEditImpl GUI specific", () => {
         mockExtras,
       );
 
-      expect(mockExtras.ideMessenger.ide.readFile).toHaveBeenCalledWith(
-        "file:///dir/test/file.txt",
+      expect(mockExtras.ideMessenger.ide.streamTextEdit).toHaveBeenCalledWith(
+        FILE_URI,
+        [
+          {
+            startLine: 0,
+            startCharacter: 0,
+            endLine: 0,
+            endCharacter: 5,
+            newText: "Hi",
+            version: 3,
+          },
+        ],
       );
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "id",
-        text: "Hi world",
-        filepath: "file:///dir/test/file.txt",
-        isSearchAndReplace: true,
-      });
     });
 
-    it("should wrap IDE readFile errors", async () => {
-      mockExtras.ideMessenger.ide.readFile = vi
+    it("should reject when the extension reports a version conflict", async () => {
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
+        .fn()
+        .mockResolvedValue({ contents: "Hello world", version: 3 });
+      mockExtras.ideMessenger.ide.streamTextEdit = vi
+        .fn()
+        .mockResolvedValue(false);
+
+      await expect(
+        multiEditImpl(
+          {
+            filepath: "file.txt",
+            edits: [{ old_string: "Hello", new_string: "Hi" }],
+          },
+          "id",
+          mockExtras,
+        ),
+      ).rejects.toThrow(/version conflict/);
+    });
+
+    it("should wrap IDE read errors", async () => {
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
         .fn()
         .mockRejectedValue(new Error("Read failed"));
 
@@ -156,10 +183,10 @@ describe("multiEditImpl GUI specific", () => {
 
   describe("return value", () => {
     it("should return structure for async completion", async () => {
-      mockResolveRelativePathInDir.mockResolvedValue(
-        "file:///dir/test/file.txt",
-      );
-      mockExtras.ideMessenger.ide.readFile = vi.fn().mockResolvedValue("test");
+      mockResolveRelativePathInDir.mockResolvedValue(FILE_URI);
+      mockExtras.ideMessenger.ide.readFileWithVersion = vi
+        .fn()
+        .mockResolvedValue({ contents: "test", version: 2 });
 
       const result = await multiEditImpl(
         {
@@ -171,8 +198,13 @@ describe("multiEditImpl GUI specific", () => {
       );
 
       expect(result).toEqual({
-        respondImmediately: false,
-        output: undefined,
+        respondImmediately: true,
+        output: [
+          expect.objectContaining({
+            name: "file.txt",
+            uri: { type: "file", value: FILE_URI },
+          }),
+        ],
       });
     });
   });

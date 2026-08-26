@@ -883,6 +883,46 @@ export interface IDE {
     }>,
   ): Promise<boolean>;
 
+  /**
+   * Stream text edits to a file in a version-aware manner (Copilot-style).
+   * Each edit carries the document version it was computed against. If the
+   * document has changed since the caller computed positions, the edit is
+   * rejected to prevent buffer/disk desync from race conditions.
+   *
+   * Pass isWholeFile=true to replace the entire document with edits[0].newText
+   * (version-checked, applied through the editor buffer so disk stays in sync).
+   */
+  streamTextEdit?(
+    filepath: string,
+    edits: Array<{
+      startLine: number;
+      startCharacter: number;
+      endLine: number;
+      endCharacter: number;
+      newText: string;
+      version?: number;
+    }>,
+    isWholeFile?: boolean,
+  ): Promise<boolean>;
+
+  /**
+   * Get the current version of an open document in the editor.
+   * Returns undefined if the document is not open.
+   * Used with streamTextEdit for version-aware editing.
+   */
+  getDocumentVersion?(filepath: string): Promise<number | undefined>;
+
+  /**
+   * Atomically read a document's contents together with its version.
+   * Binding the snapshot to its version eliminates the race between reading
+   * content and capturing the version (the root cause of stale positions),
+   * mirroring Copilot's editor-state-stream binding.
+   * Returns undefined version if the file is not open in the editor.
+   */
+  readFileWithVersion?(
+    filepath: string,
+  ): Promise<{ contents: string; version?: number }>;
+
   removeFile(path: string): Promise<void>;
 
   showVirtualFile(title: string, contents: string): Promise<void>;

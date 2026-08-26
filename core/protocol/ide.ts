@@ -38,6 +38,37 @@ export type ToIdeFromWebviewOrCoreProtocol = {
     },
     boolean,
   ];
+  // Get the current version of an open document in the editor.
+  // Returns undefined if the document is not open. Used for
+  // version-aware editing (Copilot-style) to prevent stale edits.
+  getDocumentVersion: [{ filepath: string }, number | undefined];
+  // Atomically read a document's contents together with its version.
+  // Binding snapshot and version in one call removes the race between
+  // reading content and capturing the version, matching Copilot's
+  // editor-state-stream binding.
+  readFileWithVersion: [
+    { filepath: string },
+    { contents: string; version?: number },
+  ];
+  // Version-aware streaming text edit (Copilot-style)
+  // Each edit carries the document version it was computed against.
+  // VS Code natively rejects stale edits when versions don't match,
+  // preventing buffer/disk desync from race conditions.
+  streamTextEdit: [
+    {
+      filepath: string;
+      edits: Array<{
+        startLine: number;
+        startCharacter: number;
+        endLine: number;
+        endCharacter: number;
+        newText: string;
+        version?: number; // The document version this edit was computed against
+      }>;
+      isWholeFile?: boolean; // If true, use a full-document replacement with version check
+    },
+    boolean,
+  ];
   removeFile: [{ path: string }, void];
   showVirtualFile: [{ name: string; content: string }, void];
   openFile: [{ path: string }, void];

@@ -122,6 +122,28 @@ export class ReverseMessageIde {
       return this.ide.applyEdit?.(data.filepath, data.edits) ?? false;
     });
 
+    this.on("getDocumentVersion", (data) => {
+      return this.ide.getDocumentVersion?.(data.filepath);
+    });
+
+    this.on("streamTextEdit", (data) => {
+      return (
+        this.ide.streamTextEdit?.(
+          data.filepath,
+          data.edits,
+          data.isWholeFile,
+        ) ?? false
+      );
+    });
+
+    this.on("readFileWithVersion", (data) => {
+      const method = this.ide.readFileWithVersion;
+      if (!method) {
+        throw new Error("IDE does not support readFileWithVersion");
+      }
+      return method(data.filepath);
+    });
+
     this.on("fileExists", (data) => {
       return this.ide.fileExists(data.filepath);
     });

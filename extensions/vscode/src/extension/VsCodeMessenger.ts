@@ -716,6 +716,19 @@ export class VsCodeMessenger {
     this.onWebviewOrCore("applyEdit", async (msg) => {
       return ide.applyEdit(msg.data.filepath, msg.data.edits);
     });
+    this.onWebviewOrCore("getDocumentVersion", async (msg) => {
+      return ide.getDocumentVersion(msg.data.filepath);
+    });
+    this.onWebviewOrCore("streamTextEdit", async (msg) => {
+      return ide.streamTextEdit(
+        msg.data.filepath,
+        msg.data.edits,
+        msg.data.isWholeFile,
+      );
+    });
+    this.onWebviewOrCore("readFileWithVersion", async (msg) => {
+      return ide.readFileWithVersion(msg.data.filepath);
+    });
     this.onWebviewOrCore("showVirtualFile", async (msg) => {
       return ide.showVirtualFile(msg.data.name, msg.data.content);
     });
