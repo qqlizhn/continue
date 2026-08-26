@@ -100,6 +100,5 @@ export async function shareSession(
 
   const fileUrl = pathToFileURL(outPath).toString(); // TODO switch from path to URI above ^
   await ide.writeFile(fileUrl, content);
-  await ide.openFile(fileUrl);
   return fileUrl;
 }

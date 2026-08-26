@@ -179,8 +179,7 @@ export async function createNewWorkspaceBlockFile(
 
   const fileContent = getFileContent(blockType);
 
-  await ide.writeFile(fileUri, fileContent);
-  await ide.openFile(fileUri);
+  await writeFilePreferringApplyEdit(ide, fileUri, fileContent);
 }
 
 export async function createNewGlobalRuleFile(
@@ -204,10 +203,73 @@ export async function createNewGlobalRuleFile(
 
     const fileContent = getFileContent("rules");
 
-    await ide.writeFile(fileUri, fileContent);
-
-    await ide.openFile(fileUri);
+    await writeFilePreferringApplyEdit(ide, fileUri, fileContent);
   } catch (error) {
     throw error;
   }
+}
+
+/**
+ * Write file contents to disk, preferring the IDE's applyEdit API when
+ * available. This avoids VSCode's "unsaved changes" conflict that occurs
+ * when writeFile writes to disk but the editor buffer is not synchronized.
+ */
+async function writeFilePreferringApplyEdit(
+  ide: IDE,
+  fileUri: string,
+  contents: string,
+): Promise<void> {
+  // New files can be written directly - no editor buffer conflict possible
+  if (!(await ide.fileExists(fileUri))) {
+    await ide.writeFile(fileUri, contents);
+    return;
+  }
+
+  // The file already exists on disk (e.g. a race condition where the file
+  // was created between findAvailableFilename and writeFile, or an override
+  // that targets an existing file). Prefer applyEdit to keep the editor
+  // buffer in sync, then fall back to writeFile if applyEdit is unavailable.
+  if (ide.applyEdit) {
+    const originalContents = await ide.readFile(fileUri);
+    const fullRange = getFullDocumentRange(originalContents);
+
+    const applied = await ide.applyEdit(fileUri, [
+      {
+        startLine: fullRange.startLine,
+        startCharacter: fullRange.startCharacter,
+        endLine: fullRange.endLine,
+        endCharacter: fullRange.endCharacter,
+        newText: contents,
+      },
+    ]);
+
+    if (applied) {
+      return;
+    }
+  }
+
+  await ide.writeFile(fileUri, contents);
+}
+
+/**
+ * Computes a range covering the entire document, replicating the logic
+ * used by VSCode's ApplyManager for full-document replacements.
+ */
+function getFullDocumentRange(contents: string): {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
+} {
+  if (!contents) {
+    return { startLine: 0, startCharacter: 0, endLine: 0, endCharacter: 0 };
+  }
+
+  const lines = contents.split(/\r?\n/);
+  return {
+    startLine: 0,
+    startCharacter: 0,
+    endLine: Math.max(lines.length - 1, 0),
+    endCharacter: lines[lines.length - 1]?.length ?? 0,
+  };
 }

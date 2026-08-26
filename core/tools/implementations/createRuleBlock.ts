@@ -34,7 +34,6 @@ export const createRuleBlockImpl: ToolImpl = async (args, extras) => {
   const ruleFilePath = createRuleFilePath(localContinueDir, name);
 
   await extras.ide.writeFile(ruleFilePath, fileContent);
-  await extras.ide.openFile(ruleFilePath);
 
   return [
     {

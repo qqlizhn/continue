@@ -72,5 +72,4 @@ export async function createNewPromptFileV2(
   globalContext.update("hasAlreadyCreatedAPromptFile", true);
 
   await ide.writeFile(promptFileUri, PROMPT_FILE);
-  await ide.openFile(promptFileUri);
 }

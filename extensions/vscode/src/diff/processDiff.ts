@@ -30,9 +30,8 @@ export async function processDiff(
     return;
   }
 
-  await ide.openFile(newOrCurrentUri);
-
   // If streamId is not provided, try to get it from the VerticalDiffManager
+
   if (!streamId) {
     streamId = verticalDiffManager.getStreamIdForFile(newOrCurrentUri);
   }

@@ -1,6 +1,11 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { saveCurrentSession } from "../../redux/thunks/session";
+import {
+  DEFAULT_AUTO_COMPACT_CONTEXT_THRESHOLD,
+  shouldAutoCompactConversation,
+} from "../../util/autoCompactConversation";
 import { useCompactConversation } from "../../util/compactConversation";
 import { ToolTip } from "../gui/Tooltip";
 
@@ -12,29 +17,71 @@ const ContextStatus = () => {
   const selectedChatModel = useAppSelector(
     (state) => state.config.config.selectedModelByRole.chat?.model,
   );
-  const previousHistoryLength = useRef<number | null>(null);
-  const previousSelectedChatModel = useRef<string | null>(null);
   const history = useAppSelector((state) => state.session.history);
   const percent = Math.round((contextPercentage ?? 0) * 100);
   const isPruned = useAppSelector((state) => state.session.isPruned);
+  const latestHistoryIndex = history.length - 1;
+  const isLatestCompactionLoading = useAppSelector((state) =>
+    latestHistoryIndex >= 0
+      ? !!state.session.compactionLoading[latestHistoryIndex]
+      : false,
+  );
+  const previousHistoryLength = useRef<number | null>(null);
+  const previousSelectedChatModel = useRef<string | null>(null);
+  const lastAutoCompactedKey = useRef<string | null>(null);
 
   const isDifferentModelAndSameHistory = useMemo(() => {
     if (!selectedChatModel) return false;
-    // only reset if history changes
+
     if (previousHistoryLength.current !== history.length) {
       previousHistoryLength.current = history.length;
       previousSelectedChatModel.current = selectedChatModel;
       return false;
     }
+
     return previousSelectedChatModel.current !== selectedChatModel;
   }, [history.length, selectedChatModel]);
 
   const compactConversation = useCompactConversation();
+
+  useEffect(() => {
+    if (history.length === 0 || latestHistoryIndex < 0) {
+      return;
+    }
+
+    const latestItem = history[latestHistoryIndex];
+    const hasLatestSummary = !!latestItem?.conversationSummary;
+    const compactionKey = `${selectedChatModel ?? "unknown"}:${latestItem?.message.id ?? latestHistoryIndex}`;
+    const shouldCompact = shouldAutoCompactConversation({
+      historyLength: history.length,
+      contextPercentage,
+      isPruned,
+      isCompactionLoading: isLatestCompactionLoading,
+      threshold: DEFAULT_AUTO_COMPACT_CONTEXT_THRESHOLD,
+    });
+
+    if (
+      !hasLatestSummary &&
+      shouldCompact &&
+      lastAutoCompactedKey.current !== compactionKey
+    ) {
+      lastAutoCompactedKey.current = compactionKey;
+      void compactConversation(latestHistoryIndex);
+    }
+  }, [
+    compactConversation,
+    contextPercentage,
+    history,
+    isLatestCompactionLoading,
+    isPruned,
+    latestHistoryIndex,
+    selectedChatModel,
+  ]);
+
   if (!isPruned && percent < 60) {
     return null;
   }
 
-  // if user changed to a different model, we shouldn't show the context status until the user sends a new message
   if (isDifferentModelAndSameHistory) {
     return null;
   }
@@ -45,7 +92,6 @@ const ContextStatus = () => {
     <div>
       <ToolTip
         closeEvents={{
-          // blur: false,
           mouseleave: true,
           click: true,
           mouseup: false,

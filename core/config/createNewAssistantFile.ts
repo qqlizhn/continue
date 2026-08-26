@@ -52,5 +52,4 @@ export async function createNewAssistantFile(
   } while (await ide.fileExists(assistantFileUri));
 
   await ide.writeFile(assistantFileUri, DEFAULT_ASSISTANT_FILE);
-  await ide.openFile(assistantFileUri);
 }
